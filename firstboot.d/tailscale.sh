@@ -29,13 +29,22 @@ if [ ! -f /config/tailscale/systemd/tailscaled.service.d/mount.conf ]; then
 RequiresMountsFor=/var/lib/tailscale
 	EOF
 fi
+
+# Add an override to tailscaled.service to delay startup for 20 seconds
+if [ ! -f /config/tailscale/systemd/tailscaled.service.d/delay-startup.conf ]; then
+	cat > /config/tailscale/systemd/tailscaled.service.d/delay-startup.conf <<-EOF
+[Service]
+ExecStartPre=/bin/sleep 20
+	EOF
+fi
+
 # Add an override to tailscaled.service to wait until "UBNT Routing Daemons"
 # has finished, otherwise tailscaled won't have proper networking
 if [ ! -f /config/tailscale/systemd/tailscaled.service.d/wait-for-networking.conf ]; then
 	cat > /config/tailscale/systemd/tailscaled.service.d/wait-for-networking.conf <<-EOF
 [Unit]
-Wants=vyatta-router.service
-After=vyatta-router.service
+After=vyatta-router.service network-online.target
+Wants=network-online.target
 	EOF
 fi
 
@@ -88,7 +97,10 @@ if ! echo $pkg_status| grep -qF "install ok installed"; then
 	if echo $pkg_status | grep -qF "half-configured"; then
 		# Use systemd-run to configure the package in a separate unit, otherwise it will block
 		# due to tailscaled.service waiting on vyatta-router.service, which is running this script.
-		systemd-run --no-block dpkg --configure -a
+		# Timeout after 30 seconds to avoid hanging boot
+		timeout 30 dpkg --configure -a || true
+		sleep 2  # Give things a moment to settle
+		systemctl --no-block restart tailscaled
 	else
 		echo "Installing Tailscale"
 		apt-get update
